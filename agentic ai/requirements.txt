@@ -1,0 +1,19 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+sqlmodel==0.0.22
+httpx==0.27.2
+pydantic==2.9.2
+python-dotenv==1.0.1
+TXTEOF
+
+cat > .env.example <<'TXTEOF'
+# Any OpenAI-compatible endpoint works. Pick one provider and fill these in.
+LLM_API_KEY=
+LLM_BASE_URL=https://api.z.ai/api/paas/v4
+LLM_MODEL=glm-4-flash
+
+# Alternatives (set BASE_URL + MODEL + KEY together):
+#   Groq:   https://api.groq.com/openai/v1        llama-3.3-70b-versatile
+#   OpenAI: https://api.openai.com/v1             gpt-4o-mini
+# Set LLM_CACHE=0 to disable the disk cache (keep it on for the demo).
+LLM_CACHE=1

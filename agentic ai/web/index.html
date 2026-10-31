@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Adaptive Physics Tutor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased">
+<div id="root"></div>
+<script type="text/babel">
+const { useEffect, useState, useRef } = React;
+const SID = "demo";
+
+const api = async (path, body) => {
+  const opts = body
+    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : {};
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+  return data;
+};
+
+const color = (v) =>
+  v >= 0.75 ? "bg-emerald-500" : v >= 0.55 ? "bg-lime-500" : v >= 0.40 ? "bg-amber-500" :
+  v >= 0.25 ? "bg-orange-500" : "bg-rose-600";
+
+const TONES = {
+  good: "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30",
+  bad: "bg-rose-500/15 text-rose-300 border border-rose-500/30",
+  mid: "bg-amber-500/15 text-amber-300 border border-amber-500/30",
+  mute: "bg-slate-700/40 text-slate-300 border border-slate-600/40",
+};
+
+function Chip({ children, tone }) {
+  return <span className={"px-2 py-0.5 rounded text-[11px] font-medium " + (TONES[tone] || TONES.mute)}>{children}</span>;
+}
+
+function Bars({ model }) {
+  if (!model || !model.length) return <p className="text-sm text-slate-500">loading…</p>;
+  return (
+    <div className="space-y-1.5">
+      {model.map((c) => (
+        <div key={c.id}>
+          <div className="flex justify-between text-[11px] text-slate-400">
+            <span className="truncate pr-2">{c.name}</span>
+            <span className="tabular-nums">{c.score.toFixed(2)}</span>
+          </div>
+          <div className="h-1.5 rounded bg-slate-800">
+            <div className={"h-1.5 rounded " + color(c.score)} style={{ width: (c.score * 100).toFixed(0) + "%" }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Student() {
+  const [q, setQ] = useState(null);
+  const [model, setModel] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [res, setRes] = useState(null);
+  const [traces, setTraces] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [listening, setListening] = useState(false);
+  const recRef = useRef(null);
+
+  useEffect(() => {
+    api("/api/session/start?student_id=" + SID)
+      .then((d) => { setQ(d.question); setModel(d.model); })
+      .catch((e) => setErr(String(e.message || e)));
+  }, []);
+
+  const submit = async () => {
+    if (!draft.trim() || !q) return;
+    setBusy(true); setErr("");
+    try {
+      const d = await api("/api/turn", { student_id: SID, question_id: q.id, transcript: draft });
+      setRes(d); setModel(d.model); setTraces(d.trace || []);
+      if (d.next) setQ(d.next);
+      setDraft("");
+    } catch (e) { setErr(String(e.message || e)); }
+    setBusy(false);
+  };
+
+  const toggleMic = () => {
+    if (listening && recRef.current) { recRef.current.stop(); setListening(false); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setErr("No browser mic here — dictate with Wispr Flow into the box instead."); return; }
+    const rec = new SR();
+    rec.lang = "en-IN"; rec.continuous = true; rec.interimResults = true;
+    rec.onresult = (evt) => {
+      let text = "";
+      for (let i = 0; i < evt.results.length; i++) text += evt.results[i][0].transcript + " ";
+      setDraft(text.trim());
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => { setListening(false); setErr("Mic stopped. You can type instead."); };
+    rec.start(); recRef.current = rec; setListening(true);
+  };
+
+  const ev = res && res.evaluation;
+
+  return (
+    <div className="grid gap-5 p-5 lg:grid-cols-[1.45fr_1fr]">
+      <div className="space-y-4">
+        {err && <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{err}</div>}
+
+        {q && (
+          <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip tone="mute">{q.concept_name}</Chip>
+              <Chip tone="mid">{q.difficulty_label}</Chip>
+              <Chip tone="mute">{q.why.phase}</Chip>
+              <Chip tone="mute">b = {q.difficulty_b}</Chip>
+            </div>
+            <p className="text-lg leading-relaxed">{q.text}</p>
+            <div className="grid gap-2">
+              {Object.entries(q.options).map(([k, v]) => (
+                <button key={k}
+                  onClick={() => setDraft((d) => (d ? d + " " : "") + "Answer " + k + ", because ")}
+                  className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-left text-sm hover:border-indigo-500/60">
+                  <span className="mr-2 font-semibold text-indigo-300">{k}</span>{v}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-slate-500">Agent reasoning: {q.why.reason} · gap {q.why.gap} · readiness {q.why.readiness}</p>
+          </div>
+        )}
+
+        <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-300">Your spoken answer</h3>
+            <button onClick={toggleMic}
+              className={"rounded-lg px-3 py-1.5 text-xs font-medium " + (listening ? "bg-rose-500 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700")}>
+              {listening ? "Stop mic" : "Speak"}
+            </button>
+          </div>
+          <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={6}
+            placeholder="Dictate here with Wispr Flow, or type. Fillers, false starts and self-corrections are all fine."
+            className="w-full resize-none rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-indigo-500/60" />
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-slate-500">{draft.trim().split(/\s+/).filter(Boolean).length} words</span>
+            <button onClick={submit} disabled={busy || !draft.trim()}
+              className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-40">
+              {busy ? "Agents working…" : "Submit answer"}
+            </button>
+          </div>
+        </div>
+
+        {res && res.mode === "clarify" && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+            No answer detected in that dictation — I re-asked the same question. Clarify agent notes: {(res.clarify || []).join(" · ") || "none"}
+          </div>
+        )}
+
+        {ev && (
+          <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+            <div className="flex flex-wrap gap-2">
+              <Chip tone={ev.answer_correct ? "good" : "bad"}>answer {ev.answer_correct ? "correct" : "wrong"}</Chip>
+              <Chip tone={ev.reasoning_valid ? "good" : "bad"}>reasoning {ev.reasoning_valid ? "valid" : "invalid"}</Chip>
+              {ev.lucky_guess && <Chip tone="mid">lucky guess</Chip>}
+              <Chip tone="mute">{ev.misconception_code}</Chip>
+              <Chip tone="mute">severity {ev.severity}</Chip>
+            </div>
+            <div className="text-sm text-slate-300">
+              <span className="text-slate-500">Mastery: </span>
+              {res.mastery.concept_name}: {res.mastery.before.toFixed(2)} →{" "}
+              <span className={res.mastery.delta >= 0 ? "text-emerald-300" : "text-rose-300"}>
+                {res.mastery.after.toFixed(2)} ({res.mastery.delta >= 0 ? "+" : ""}{res.mastery.delta.toFixed(2)})
+              </span>
+              <span className="text-slate-500"> · evidence weight {res.mastery.reliability}</span>
+            </div>
+            {res.normalized.self_corrections.length > 0 && (
+              <div className="text-sm text-slate-400">
+                <span className="text-slate-500">Self-corrections captured: </span>
+                {res.normalized.self_corrections.map((s, i) => (
+                  <span key={i} className="mr-2">{s.from} → {s.to}</span>
+                ))}
+              </div>
+            )}
+            <p className="text-sm text-indigo-200">{ev.feedback}</p>
+            <p className="text-xs text-slate-500">Hint: {ev.hint}</p>
+            {res.propagation.length > 0 && (
+              <p className="text-xs text-amber-300">
+                Prerequisite flagged: {res.propagation.map((p) => p.concept + " " + p.before.toFixed(2) + "→" + p.after.toFixed(2)).join(", ")}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h3 className="mb-3 text-sm font-semibold text-slate-300">Learner model</h3>
+          <Bars model={model} />
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h3 className="mb-2 text-sm font-semibold text-slate-300">Agent trace</h3>
+          {traces.length === 0 && <p className="text-xs text-slate-500">Submit an answer to see the pipeline.</p>}
+          <ul className="space-y-1.5 text-xs">
+            {traces.map((t, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="w-32 shrink-0 font-medium text-indigo-300">{t.agent}</span>
+                <span className="text-slate-400">{t.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        {res && res.normalized && (
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <h3 className="mb-2 text-sm font-semibold text-slate-300">Normalized dictation</h3>
+            <p className="text-xs leading-relaxed text-slate-400">{res.normalized.cleaned_reasoning}</p>
+            {res.normalized.ambiguities.length > 0 && (
+              <p className="mt-2 text-[11px] text-amber-300">Ambiguities: {res.normalized.ambiguities.join("; ")}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Teacher() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const load = () => api("/api/teacher/class").then(setData).catch((e) => setErr(String(e.message || e)));
+
+  useEffect(() => { load(); }, []);
+  if (err) return <div className="p-6 text-sm text-rose-300">{err}</div>;
+  if (!data) return <div className="p-6 text-sm text-slate-500">loading…</div>;
+
+  const concepts = data.concepts;
+
+  return (
+    <div className="space-y-5 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Class 10-B · concept mastery</h2>
+          <p className="text-xs text-slate-500">{data.students.length} students · red means the class does not understand it</p>
+        </div>
+        <button
+          onClick={async () => { await api("/api/teacher/simulate_days", { days: 7 }); load(); }}
+          className="rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-400">
+          Simulate 7 days of forgetting
+        </button>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+        <div className="grid gap-1" style={{ gridTemplateColumns: "140px repeat(" + concepts.length + ", minmax(16px, 1fr))" }}>
+          <div />
+          {concepts.map((c, i) => (
+            <div key={c.id} title={c.name} className="text-center text-[10px] text-slate-500">{i + 1}</div>
+          ))}
+          {data.students.map((s) => (
+            <React.Fragment key={s.id}>
+              <div className="truncate pr-2 text-xs text-slate-400">{s.name}</div>
+              {concepts.map((c) => {
+                const v = s.scores[c.id];
+                return (
+                  <div key={c.id}
+                    title={c.name + ": " + (v === null || v === undefined ? "n/a" : v.toFixed(2))}
+                    className={"h-5 rounded-sm " + (v === null || v === undefined ? "bg-slate-800" : color(v))} />
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-500 md:grid-cols-3">
+          {concepts.map((c, i) => (
+            <div key={c.id}><span className="text-slate-400">{i + 1}.</span> {c.name}</div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h3 className="mb-3 text-sm font-semibold text-slate-300">Class-wide gaps</h3>
+          <ul className="space-y-2">
+            {data.gaps.map((g) => (
+              <li key={g.id} className="text-xs">
+                <div className="flex justify-between text-slate-400">
+                  <span>{g.name}</span>
+                  <span className="tabular-nums">{g.avg.toFixed(2)} · {g.at_risk}/{g.n} at risk</span>
+                </div>
+                <div className="mt-1 h-1.5 rounded bg-slate-800">
+                  <div className={"h-1.5 rounded " + color(g.avg)} style={{ width: (g.avg * 100).toFixed(0) + "%" }} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h3 className="mb-3 text-sm font-semibold text-slate-300">Top misconceptions</h3>
+          {data.top_misconceptions.length === 0 && <p className="text-xs text-slate-500">No graded attempts yet.</p>}
+          <ul className="space-y-1.5 text-xs">
+            {data.top_misconceptions.map((m) => (
+              <li key={m.code} className="flex justify-between text-slate-400">
+                <span>{m.code}</span><span className="tabular-nums text-slate-300">{m.count}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [view, setView] = useState("student");
+  return (
+    <div className="min-h-screen">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-5 py-3">
+        <div>
+          <h1 className="font-semibold">Adaptive Physics Tutor</h1>
+          <p className="text-xs text-slate-500">Class 10 · voice-first · learner model · concept graph</p>
+        </div>
+        <div className="flex gap-2 text-sm">
+          {["student", "teacher"].map((v) => (
+            <button key={v} onClick={() => setView(v)}
+              className={"rounded-lg px-3 py-1.5 " + (view === v ? "bg-indigo-500 text-white" : "bg-slate-800 text-slate-300")}>
+              {v === "student" ? "Student" : "Teacher"}
+            </button>
+          ))}
+        </div>
+      </header>
+      {view === "student" ? <Student /> : <Teacher />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
